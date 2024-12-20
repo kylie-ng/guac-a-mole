@@ -1,0 +1,504 @@
+module Project (CLOCK_50, SW, KEY, HEX3, HEX2, HEX1, HEX0, HEX5, VGA_R, VGA_G, VGA_B,
+				VGA_HS, VGA_VS, VGA_BLANK_N, VGA_SYNC_N, VGA_CLK, LEDR, PS2_CLK, PS2_DAT);
+	input CLOCK_50;	
+	input [9:0] SW;
+	input [3:0] KEY;
+	output [9:0] LEDR;
+   output [6:0] HEX3, HEX2, HEX1, HEX0, HEX5;
+	output [7:0] VGA_G;
+	output [7:0] VGA_B;
+	output [7:0] VGA_R;
+	output VGA_HS;
+	output VGA_VS;
+	output VGA_BLANK_N;
+	output VGA_SYNC_N;
+	output VGA_CLK;
+
+	inout	PS2_CLK;
+	inout	PS2_DAT;
+	
+	parameter start = 4'b0000, menu = 4'b0001, loading = 4'b0010, pop1 = 4'b0011, pop2 = 4'b0100, pop3 = 4'b0101, pop4 = 4'b0110, pop5 = 4'b0111;
+	parameter pause = 4'b1001, endgame = 4'b1010; 
+	
+	wire go, resetn, round_enable, game_enable,hit1,hit2,hit3,hit4,z,E,whacked,p0,p1,p2,L,wronghit,done,scoreclk;
+	wire [1:0] level;
+	wire [2:0] score;
+	wire [3:0] lights,count;
+	wire [27:0] clkround; 
+	wire [29:0] clkgame; 
+	wire [6:0] c0, c1, c2, col0, col1, col2, col3;
+	reg [3:0] current, state; 
+	reg [2:0] VGA_COLOUR;
+	wire [2:0] downscreen, fourthscreen, firstscreen, endscreen, levelscreen, secondscreen, thirdscreen;
+	wire [2:0] startgamescreen;
+	
+	
+//-------KEYBOARD-------------------------------------------------------------------
+	
+	wire notpressed;
+	assign notpressed =  (current == loading) | (current == pause); 
+	
+	// Internal Wires
+	wire		[7:0]	ps2_key_data;
+	wire				ps2_key_pressed;
+
+	// Internal Registers
+	reg			[7:0]	last_data_received;
+	
+		
+	always @(posedge CLOCK_50)
+	begin
+		if ((KEY[0] == 1'b0) | (notpressed == 1'b1) | (keycur == erase))
+			last_data_received <= 8'h00;
+		else if (ps2_key_pressed == 1'b1)
+			last_data_received <= ps2_key_data;
+	end
+	
+		
+	PS2_Controller PS2 (
+		// Inputs
+		.CLOCK_50				(CLOCK_50),
+		.reset				(~KEY[0]),
+
+		// Bidirectionals
+		.PS2_CLK			(PS2_CLK),
+		.PS2_DAT			(PS2_DAT),
+
+		// Outputs
+		.received_data		(ps2_key_data),
+		.received_data_en	(ps2_key_pressed)
+	);
+
+	Hexadecimal_To_Seven_Segment Segment0 (
+		// Inputs
+		.hex_number			(last_data_received[3:0]),
+
+		// Bidirectional
+
+		// Outputs
+		.seven_seg_display	(HEX0)
+	);
+
+	Hexadecimal_To_Seven_Segment Segment1 (
+		// Inputs
+		.hex_number			(last_data_received[7:4]),
+
+		// Bidirectional
+
+		// Outputs
+		.seven_seg_display	(HEX1)
+	);
+	
+	
+	
+	
+	
+//---------------------------------------------------------------------------------
+	
+	//INITIALIZE LENGTH OF THE ROUNDS BASED ON THE LEVEL CHOSEN 
+	wire level_enable;
+	reg [27:0] length; 
+	
+	assign level_enable = (current == menu); 
+	
+	always @ (posedge CLOCK_50)
+	begin 
+		if (!resetn)
+			length <= 27'd100000000;
+		else if (level_enable & last_data_received == 8'h16)
+			length <= 27'd100000000;
+		else if (level_enable & last_data_received == 8'h1E)
+			length <= 27'd50000000;
+		else if (level_enable & last_data_received == 8'h26)
+			length <= 27'd25000000; 
+	end 
+	//----WORKS-------
+		
+		
+//----------------------------------------------------------
+
+	parameter get = 4'd0, key1 = 4'd1, key2 = 4'd2, key3 = 4'd3, key4 = 4'd4, erase = 4'd5; 
+	
+	reg [3:0] keycur, keynext; 
+	reg enablescore; 
+	
+	always @(*)
+	begin 
+		case(keycur)
+			get:  begin 
+					if (last_data_received == 8'h1C | last_data_received == 8'h1D | last_data_received == 8'h1B | last_data_received == 8'h23) keynext = key1;
+					enablescore = 1'b1;
+					end
+			
+			key1: begin
+					if (current == paused) keynext = erase; 
+					enablescore = 1'b0;
+					end 
+
+			erase: begin
+					 if (round_enable) keynext = get; 
+					 enablescore = 1'b0; 
+					 end 
+		endcase
+	end 
+	
+	always @ (posedge CLOCK_50)
+	begin
+		if (!resetn) 
+			keycur <= get;
+		else 
+			keycur <= keynext; 
+	end 
+	
+	wire correcthit, washit; 
+	
+	assign correcthit = enablescore & ((last_data_received == 8'h1C) & (current == pop1) |
+							  (last_data_received == 8'h1D) & (current == pop2) |
+							  (last_data_received == 8'h1B) & (current == pop3) | 
+							  (last_data_received == 8'h23) & (current == pop4));
+	
+	
+	
+	//count score and display 
+	scorecounter s1 (L,round_enable,correcthit,score,wronghit,correcthit); //works
+	eachhex h1 (score,HEX5);
+	
+	 
+	assign LEDR[5] = correcthit; 
+	assign LEDR[4] = 1'b0; 
+			
+	
+	
+
+
+//----------------------------------------------------------
+	
+	
+	
+	
+	
+	
+	vga_demo print1 (CLOCK_50, SW, KEY, VGA_R, VGA_G, VGA_B,
+				VGA_HS, VGA_VS, VGA_BLANK_N, VGA_SYNC_N, VGA_CLK,resetn,1'b1,current);
+				
+				
+	//mux_roundlength m1(level, length); //fix how to load length (without it changing through out the game) 
+	
+	//clocks 
+	clockperround cl1 (CLOCK_50, resetn, clkround, round_enable, length);
+	//clockpergame cl2 (CLOCK_50, resetn, clkgame, game_enable);
+	
+	
+	//for locations: p2 p1 p0
+	assign col0 = 7'b1011001;//right
+	assign col1 = 7'b1001010;
+	assign col2 = 7'b0110111;//left
+	
+	//finding the right pop up location 
+	Shiftreg sh1 (L,E,round_enable,col0,c0); //shiftregs work 
+	Shiftreg sh2 (L,E,round_enable,col1,c1);
+	Shiftreg sh3 (L,E,round_enable,col2,c2);
+	
+	//counting 5 frames per game 
+	framecounter f1 (L,E,round_enable,count); //works 
+	//eachhex h2 (count, HEX1); 
+	
+	
+	
+	
+	assign resetn = SW[0];
+	//assign go = SW[1];
+	assign go = (last_data_received == 8'h29);
+	assign level = SW[9:8];
+	
+	assign done = (last_data_received == 8'h5A); 
+	
+	
+	//FSM
+	always @ (*)
+	begin: state_table
+		
+		case (current)
+		
+			start: begin
+					 if (last_data_received == 8'h29) state = menu;
+					 else state = start;
+					 VGA_COLOUR = startgamescreen;
+					 end
+					 
+			menu: begin
+					if (done) state = loading; 
+					else state = menu;
+					VGA_COLOUR = levelscreen;
+					end
+					
+			loading: begin
+						if (round_enable & !p2 & p1 & p0) state = pop1; //add game_enable if timing each game 
+			         else if (round_enable & p2 & !p1 & !p0) state = pop2;
+						else if (round_enable & p2 & !p1 & p0) state = pop3;
+						else if (round_enable & p2 & p1 & !p0) state = pop4;
+						else state = loading;
+						VGA_COLOUR = levelscreen;
+						end
+						
+			pop1: begin
+					if (round_enable) state = pause;
+					else state = pop1; 
+					VGA_COLOUR = firstscreen;
+					end
+					
+			pop2: begin
+					if (round_enable) state = pause;
+					else state = pop2; 
+					VGA_COLOUR = secondscreen;
+					end
+					
+			pop3: begin
+					if (round_enable) state = pause;
+					else state = pop3; 
+					VGA_COLOUR = thirdscreen;
+					end 
+					
+			pop4: begin
+					if (round_enable) state = pause;
+					else state = pop4; 
+					VGA_COLOUR = fourthscreen;
+					end
+					
+			pause: begin
+					if (z) state = endgame; //change to game_enable to time each game 
+				   else if (round_enable & !p2 & p1 & p0) state = pop1;
+			      else if (round_enable & p2 & !p1 & !p0) state = pop2;
+					else if (round_enable & p2 & !p1 & p0) state = pop3;
+					else if (round_enable & p2 & p1 & !p0) state = pop4;
+				   else state = pause; 
+					VGA_COLOUR = downscreen;
+					end
+					
+			endgame: begin
+						if (last_data_received == 8'h66) state = start;
+						else state = endgame; 
+						VGA_COLOUR = endscreen;
+						end
+						
+			default: state = pause; 
+						
+		endcase
+	end
+	
+	
+	//update present state 
+	always @ (posedge CLOCK_50) 
+	begin: state_FFs 
+		if (!resetn) 
+			current <= start;
+		else 
+			current <= state;
+	end 
+	
+	//FSM outputs 
+	assign p0 = (current == loading & col0[6]) | ( (current == pause) & c0[6]); 
+	assign p1 = (current == loading & col1[6]) | ( (current == pause) & c1[6]); 
+	assign p2 = (current == loading & col2[6]) | ( (current == pause) & c2[6]); 
+	
+	assign L = (current == loading);
+	assign E = (current == pop1) | (current == pop2) | (current == pop3) | (current == pop4);
+	/*
+	assign whacked = ((current == pop1) & hit1) 
+						| ((current == pop2) & hit2) 
+						| ((current == pop3) & hit3) 
+						| ((current == pop4) & hit4) 
+						| (current == loading & round_enable);
+						
+	assign scoreclk = whacked | wronghit;	
+						
+	assign wronghit = ((current == pop1) & (hit2 | hit3 | hit4)) 
+						 | ((current == pop2) & (hit1 | hit3 | hit4)) 
+						 | ((current == pop3) & (hit2 | hit1 | hit4))
+						 | ((current == pop4) & (hit2 | hit3 | hit1));
+						 
+	wire w1,w2,w3,w4,ws;
+	assign w1 = (current == pop1) & ~hit1;
+	assign w2 = (current == pop2) & ~hit2;
+	assign w3 = (current == pop3) & ~hit3;
+	assign w4 = (current == pop4) & ~hit4;
+	
+	
+	assign ws = (current == pop1) | (current == pop2) | (current == pop3) | (current == pop4);
+	
+	assign whacked = w1 | w2 | w3 | w4;
+	assign scorecounter = ws & (~hit1 | ~hit2 | ~hit3 | ~hit4);
+	
+	wire wn1,wn2,wn3,wn4;
+	assign wn1 = (current == pop1) & (~hit2 | ~hit3 | ~hit4);
+	assign wn2 = (current == pop2) & (~hit1 | ~hit3 | ~hit4);
+	assign wn3 = (current == pop3) & (~hit2 | ~hit1 | ~hit4);
+	assign wn4 = (current == pop4) & (~hit2 | ~hit3 | ~hit1);
+	
+	assign wronghit = wn1 | wn2 | wn3 | wn4; 
+	
+	
+	
+	//keys to hit the moles 
+	assign hit1 = KEY[3];
+	assign hit2 = KEY[2];
+	assign hit3 = KEY[1];
+	assign hit4 = KEY[0];
+//	
+//	assign hit1 = last_data_received == 8'h1C;
+//	assign hit2 = last_data_received == 8'h1D;
+//	assign hit3 = last_data_received == 8'h1B;
+//	assign hit4 = last_data_received == 8'h23;
+
+	 
+	assign LEDR[5] = whacked; 
+	assign LEDR[4] = wronghit; 
+
+	//count score and display 
+	scorecounter s1 (L,round_enable,scorecounter,score,wronghit,whacked); //works
+	eachhex h1 (score,HEX5);*/
+
+	
+	assign z = ~count[0] & ~count[1] & ~count[2]; 
+	
+	assign lights[3] = (current == pop1); 
+	assign lights[2] = (current == pop2);
+	assign lights[1] = (current == pop3);
+	assign lights[0] = (current == pop4);
+	assign LEDR[3:0] = lights; 
+	
+	assign LEDR[9:6] = current;
+	
+	
+endmodule
+
+
+module scorecounter (L,E,clk,Q,X,A);
+	input L,E,clk,X,A;
+	output reg [2:0] Q; 
+	
+	always @ (posedge clk)
+	begin 
+		if (L)
+			Q <= 4'b0000;
+		else if (Q == 4'b0 & X == 1'b1)
+			Q <= Q;
+		else if (X)
+			Q <= Q - 1'b1;
+		else
+			Q <= Q + 1'b1; 
+	end 
+	
+endmodule 
+
+module framecounter (L,E,clk,Q);
+	input L,E,clk;
+	output reg [3:0] Q; 
+	
+	always @ (posedge clk) 
+	begin 
+		if (L == 1'b1) //if go is pressed game starts with 5 frames
+			Q <= 4'b0111;
+		else if (E == 1'b1) //if in state win/lose, count down 
+			Q <= Q - 1'b1; 
+	end 
+	
+endmodule 
+
+module Shiftreg (L,E,clk,position,Q);
+	input [6:0] position;
+	input L, E, clk;
+	output reg [6:0] Q;
+	
+	always @ (posedge clk) 
+		if (L) //load the register with the letter choosen 
+		begin
+			Q <= position;
+		end
+		else if (E) //shift only when in pause state
+		begin 
+			Q[0] <= 1'b0; //assign to anything at the end
+			Q[1] <= Q[0]; 
+			Q[2] <= Q[1];
+			Q[3] <= Q[2];
+			Q[4] <= Q[3]; 
+			Q[5] <= Q[4];
+			Q[6] <= Q[5];
+		end 	
+ 
+endmodule 
+
+
+module clockperround (CLOCK_50, clr, Q, A, length);
+	input CLOCK_50, clr;
+	input [27:0] length;
+	output reg [27:0] Q;
+	output reg A; //A is the half_sec_enable
+	
+	always @ (posedge CLOCK_50)
+		if (!clr)
+			Q <= 28'b0;
+		else if (Q == length)
+		begin
+			A <= 1'b1; 
+			Q <= 28'b0;
+		end
+		else
+		begin
+			A <= 1'b0;
+			Q <= Q + 1'b1; // toggles
+		end
+			
+endmodule
+
+
+module mux_roundlength (level, length);
+	input [1:0] level;
+	output reg [27:0] length;
+
+	//parameter two = 27'd100000000, one = 27'd50000000, pfive = 27'd25000000;
+	parameter two = 28'd3, one = 28'd2, pfive = 28'd1;
+	
+	
+	always @(*) 
+	begin
+		case(level)
+			2'b00: length = two; //easy level = 2 sec.
+			2'b01: length = one; //medium level = 1 sec.
+			2'b10: length = pfive; //hard level = 0.5 sec. 
+			default: length = 27'bxxxxxxxxxxxxxxxxxxxxxxxxxxxx;
+		endcase
+	end 
+	
+
+endmodule
+
+
+module eachhex(X, HEX);
+
+	input [3:0]X;
+	output [6:0]HEX;
+	
+	assign HEX[0] = (~X[3] & X[2] & ~X[1] & ~X[0]) | (~X[3] & ~X[2] & ~X[1] & X[0])	
+	| (X[3] & X[2] & ~X[1] & X[0]) | (X[3] & ~X[2] & X[1] & X[0]); 
+	
+	assign HEX[1] = (X[3] & X[2] & ~X[1] & ~X[0]) | (~X[3] & X[2] & ~X[1] & X[0]) | 
+	(X[3] & X[1] & X[0]) | (X[2] & X[1] & ~X[0]);
+	
+	assign HEX[2] = (X[3] & X[2] & ~X[1] & ~X[0]) | (~X[3] & ~X[2] & X[1] & ~X[0]) |
+	(X[3] & X[2] & X[1]);
+	
+	assign HEX[3] = (X[2] & X[1] & X[0]) | (~X[2] & ~X[1] & X[0]) | 
+	(~X[3] & X[2] & ~X[1] & ~X[0]) | (X[3] & ~X[2] & X[1] & ~X[0]);
+	
+	assign HEX[4] = (~X[3] & X[0]) | (~X[3] & X[2] & ~X[1]) |
+	(X[3] & ~X[2] & ~X[1] & X[0]);
+	
+	assign HEX[5] = (~X[3] & ~X[2] & X[0]) | (~X[3] & X[1] & X[0]) | 
+	(~X[3] & ~X[2] & X[1]) | (X[3] & X[2] & ~X[1] & X[0]);
+	
+	
+	assign HEX[6] = (~X[3] & ~X[2] & ~X[1]) | (X[3] & X[2] & ~X[1] & ~X[0]) |
+	(~X[3] & X[2] & X[1] & X[0]); 
+	
+endmodule
